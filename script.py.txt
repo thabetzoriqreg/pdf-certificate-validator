@@ -1,0 +1,128 @@
+!pip install PyMuPDF
+import os
+import fitz  # PyMuPDF
+import pandas as pd
+import difflib
+from openpyxl import Workbook
+
+# ========== USER CONFIGURATION ==========
+
+# Folder paths (change as needed)
+excel_path = "/content/invoice auxein market study.xlsx"
+pdf_folder = "/content/Untitled Folder"
+output_pdf_folder = "output_pdfs"
+output_report_path = "output_reports/summary_report.xlsx"
+
+# Excel column indexes (0-based): Change if needed
+code_col_index = 0       # Column for "Code"
+desc_col_index = 1       # Column for "Description"
+sn_col_index = 2         # Column for "Serial Number"
+
+# ========== INITIALIZATION ==========
+
+# Load Excel and extract columns
+df = pd.read_excel(excel_path)
+codes = df.iloc[:, code_col_index].astype(str).tolist()
+descs = df.iloc[:, desc_col_index].astype(str).tolist()
+sns = df.iloc[:, sn_col_index].astype(str).tolist()
+
+code_info = dict(zip(codes, zip(descs, sns)))
+
+# Track report results
+report_data = []
+
+# Create output folder if it doesn't exist
+os.makedirs(output_pdf_folder, exist_ok=True)
+os.makedirs(os.path.dirname(output_report_path), exist_ok=True)
+
+# ========== PROCESS EACH PDF ==========
+pdf_files = [f for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
+
+for pdf_file in pdf_files:
+    print(f"\nProcessing PDF: {pdf_file}")
+    doc = fitz.open(os.path.join(pdf_folder, pdf_file))
+    found_codes_in_pdf = set()
+    desc_matches = {}
+
+    for page_num, page in enumerate(doc):
+        text = page.get_text()
+        annotated_codes_on_page = set()  # Keep track of codes annotated on this page
+        for code in codes:
+            if code in text and code not in annotated_codes_on_page:
+                found_codes_in_pdf.add(code)
+                rects = page.search_for(code)
+                if rects:
+                    # Only annotate the first found instance on this page
+                    rect = rects[0]
+                    # Highlight the code
+                    highlight = page.add_highlight_annot(rect)
+                    highlight.update()
+
+                    # Insert Serial Number (SN)
+                    sn = code_info[code][1]
+                    insert_point = fitz.Point(rect.x1 + 5, rect.y0)
+                    page.insert_text(insert_point, f"S.N: {sn}", fontsize=8, color=(1, 0, 0))
+
+                    # Mark code as annotated on this page
+                    annotated_codes_on_page.add(code)
+
+                    # Try to extract nearby text for description comparison
+                    nearby_text = page.get_textbox(rect.include_rect(rect + fitz.Rect(-100, -100, 100, 100)))
+                    excel_desc = code_info[code][0]
+                    pdf_desc = nearby_text.strip().replace('\n', ' ')
+
+                    # Fuzzy match ratio
+                    ratio = difflib.SequenceMatcher(None, excel_desc.lower(), pdf_desc.lower()).ratio()
+                    match_status = "Identical" if ratio > 0.85 else "Different"
+                    desc_matches[code] = {
+                        "excel": excel_desc,
+                        "pdf": pdf_desc,
+                        "match": match_status
+                    }
+
+
+    # Save modified PDF
+    output_pdf_path = os.path.join(output_pdf_folder, f"highlighted_{pdf_file}")
+    doc.save(output_pdf_path)
+    doc.close()
+
+    # Build report for this PDF
+    for code in codes:
+        excel_desc, sn = code_info[code]
+        found = "Yes" if code in found_codes_in_pdf else "No"
+        if found == "Yes":
+            desc_result = desc_matches.get(code, {})
+            match_status = desc_result.get("match", "Not Compared")
+            pdf_desc = desc_result.get("pdf", "N/A")
+        else:
+            match_status = "Not Found"
+            pdf_desc = "N/A"
+
+        report_data.append({
+            "PDF File": pdf_file,
+            "S.N": sn,
+            "Code": code,
+            "Excel Description": excel_desc,
+            "Found in Certificate": found,
+            "PDF Description": pdf_desc,
+            "Description Match": match_status
+        })
+
+# ========== SAVE FINAL REPORT ==========
+report_df = pd.DataFrame(report_data)
+
+# Pivot the report data to have codes once and documents as columns
+pivoted_report_df = report_df.pivot_table(
+    index=["S.N", "Code", "Excel Description"],
+    columns="PDF File",
+    values="Found in Certificate",
+    aggfunc='first' # Use 'first' as each code/pdf combination appears once
+).reset_index()
+
+# Fill NaN values with "Not Found" for codes not in a specific PDF
+pivoted_report_df = pivoted_report_df.fillna("Not Found")
+
+report_df = pivoted_report_df # Update report_df to the pivoted version
+
+report_df.to_excel(output_report_path, index=False)
+print(f"\n✅ All Done! Report saved to: {output_report_path}")
