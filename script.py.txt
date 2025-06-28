@@ -8,7 +8,7 @@ from openpyxl import Workbook
 # ========== USER CONFIGURATION ==========
 
 # Folder paths (change as needed)
-excel_path = "/content/invoice auxein market study.xlsx"
+excel_path = "/content/codes.xlsx"
 pdf_folder = "/content/Untitled Folder"
 output_pdf_folder = "output_pdfs"
 output_report_path = "output_reports/summary_report.xlsx"
@@ -60,11 +60,8 @@ for pdf_file in pdf_files:
 
                     # Insert Serial Number (SN)
                     sn = code_info[code][1]
-                    insert_point = fitz.Point(rect.x1 + 5, rect.y0)
+                    insert_point = fitz.Point(rect.x1 + 5, rect.y1)
                     page.insert_text(insert_point, f"S.N: {sn}", fontsize=8, color=(1, 0, 0))
-
-                    # Mark code as annotated on this page
-                    annotated_codes_on_page.add(code)
 
                     # Try to extract nearby text for description comparison
                     nearby_text = page.get_textbox(rect.include_rect(rect + fitz.Rect(-100, -100, 100, 100)))
@@ -79,6 +76,9 @@ for pdf_file in pdf_files:
                         "pdf": pdf_desc,
                         "match": match_status
                     }
+
+                    # Mark code as annotated on this page
+                    annotated_codes_on_page.add(code)
 
 
     # Save modified PDF
@@ -121,6 +121,10 @@ pivoted_report_df = report_df.pivot_table(
 
 # Fill NaN values with "Not Found" for codes not in a specific PDF
 pivoted_report_df = pivoted_report_df.fillna("Not Found")
+
+# Sort the report by S.N
+pivoted_report_df['S.N'] = pd.to_numeric(pivoted_report_df['S.N']) # Ensure S.N is numeric for proper sorting
+pivoted_report_df = pivoted_report_df.sort_values(by="S.N")
 
 report_df = pivoted_report_df # Update report_df to the pivoted version
 
